@@ -258,6 +258,11 @@ static unsigned long clk_branch2_recalc_rate(struct clk_hw *hw,
 static int clk_branch2_enable(struct clk_hw *hw)
 {
 	return clk_branch_toggle(hw, true, clk_branch2_check_halt);
+//yangmingjin@BSP.POWER.Basic 2019/05/27 delete for RM_TAG_POWER_DEBUG
+#ifndef VENDOR_EDIT
+	printk("[%s] clk_branch2_enable is called ret = %d\n",clk_hw_get_name(hw),ret);
+#endif
+/*VENDOR_EDIT*/
 }
 
 static int clk_branch2_prepare(struct clk_hw *hw)
@@ -295,6 +300,11 @@ static int clk_branch2_prepare(struct clk_hw *hw)
 		}
 	}
 exit:
+//yangmingjin@BSP.POWER.Basic 2019/05/27 delete for RM_TAG_POWER_DEBUG
+#ifndef VENDOR_EDIT
+	printk("[%s] clk_branch2_prepare is called ret = %d\n",clk_hw_get_name(hw),ret);
+#endif
+/*VENDOR_EDIT*/
 	return ret;
 }
 
