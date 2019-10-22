@@ -524,6 +524,17 @@ config ARM64_ERRATUM_1286807
 
 	  If unsure, say Y.
 
+# WT000007@ODM_WT.BSP.Kernel.Boot.Bugid,2019/04/06,Add for ODM_WT_EDIT macro for kernel usage
+config ODM_WT_EDIT
+       bool "Enable Support for ODM WT Projects"
+       depends on ARCH_QCOM
+       select CPU_FREQ_QCOM
+       select COMMON_CLK_MSM
+       help
+         This enables support for the ODM Wingtech projects. If you do not
+         wish to build a kernel that runs on this chipset, say 'N' here.
+
+
 config CAVIUM_ERRATUM_22375
 	bool "Cavium erratum 22375, 24313"
 	default y
