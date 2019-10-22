@@ -4,6 +4,6 @@ ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 else
 	dtb-$(CONFIG_ARCH_TRINKET)	+= trinket-idp.dtb
 endif
-always		:= $(dtb-y)
-subdir-y	:= $(dts-dirs)
-clean-files	:= *.dtb *.dtbo
+#always		:= $(dtb-y)
+#subdir-y	:= $(dts-dirs)
+#clean-files	:= *.dtb *.dtbo
