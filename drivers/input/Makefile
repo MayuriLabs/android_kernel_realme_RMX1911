@@ -31,3 +31,7 @@ obj-$(CONFIG_INPUT_KEYRESET)	+= keyreset.o
 obj-$(CONFIG_INPUT_KEYCOMBO)	+= keycombo.o
 
 obj-$(CONFIG_RMI4_CORE)		+= rmi4/
+#ifdef VENDOR_EDIT
+#Hongyu.lu@BSP.Fingerprint.Secure, 2018/06/22, Add for oppo secure common.
+obj-y += misc/oppo_seccommon_drivers/
+#endif
