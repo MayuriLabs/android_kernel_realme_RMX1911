@@ -620,14 +620,6 @@ static int msm_isp_composite_irq(struct vfe_device *vfe_dev,
 static void msm_isp_update_framedrop_reg(struct msm_vfe_axi_stream *stream_info,
 		uint32_t drop_reconfig)
 {
-	if (stream_info->stream_type == BURST_STREAM) {
-		if (stream_info->runtime_num_burst_capture == 0 ||
-			(stream_info->runtime_num_burst_capture == 1 &&
-			stream_info->activated_framedrop_period == 1))
-			stream_info->current_framedrop_period =
-				MSM_VFE_STREAM_STOP_PERIOD;
-	}
-
 #ifdef VENDOR_EDIT /* Camera@Drv 2019/07/22, Add for frame remap support on frame drop */
 	if (stream_info->undelivered_request_cnt > 0)
 		stream_info->current_framedrop_period =
@@ -637,8 +629,6 @@ static void msm_isp_update_framedrop_reg(struct msm_vfe_axi_stream *stream_info,
 		drop_reconfig != 1)
 		stream_info->current_framedrop_period =
 			MSM_VFE_STREAM_STOP_PERIOD;
-	if (stream_info->controllable_output && drop_reconfig == 1)
-		stream_info->current_framedrop_period = 1;
 #endif
 	/*
 	 * re-configure the period pattern, only if it's not already
@@ -1157,6 +1147,19 @@ void msm_isp_notify(struct vfe_device *vfe_dev, uint32_t event_type,
 
 	default:
 		break;
+	}
+
+	if ((vfe_dev->nanosec_ts_enable) &&
+		(event_type == ISP_EVENT_SOF) &&
+			(frame_src == VFE_PIX_0)) {
+		struct msm_isp_event_data_nanosec event_data_nanosec;
+
+		event_data_nanosec.frame_id =
+			vfe_dev->axi_data.src_info[frame_src].frame_id;
+		event_data_nanosec.nano_timestamp = ts->buf_time_ns;
+		msm_isp_send_event_update_nanosec(vfe_dev,
+			ISP_EVENT_SOF_UPDATE_NANOSEC,
+			&event_data_nanosec);
 	}
 
 	event_data.frame_id = vfe_dev->axi_data.src_info[frame_src].frame_id;
@@ -3667,7 +3670,7 @@ static int msm_isp_return_empty_buffer(struct vfe_device *vfe_dev,
 	buf->buf_debug.put_state[buf->buf_debug.put_state_last] =
 		MSM_ISP_BUFFER_STATE_DROP_REG;
 	buf->buf_debug.put_state_last ^= 1;
-	rc = vfe_dev->buf_mgr->ops->buf_done(vfe_dev->buf_mgr,
+	rc = vfe_dev->buf_mgr->ops->buf_err(vfe_dev->buf_mgr,
 		buf->bufq_handle, buf->buf_idx,
 		&timestamp.buf_time, frame_id,
 		stream_info->runtime_output_format);
@@ -3750,12 +3753,10 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 		(stream_info->undelivered_request_cnt <=
 			MAX_BUFFERS_IN_HW)
 		) {
-		pr_debug("%s:%d invalid time to request frame %d\n",
+		pr_debug("%s:%d invalid time to request frame %d try drop_reconfig\n",
 			__func__, __LINE__, frame_id);
 		vfe_dev->isp_page->drop_reconfig = 1;
-#ifdef VENDOR_EDIT /* Camera@Drv 2019/07/22, Add for frame remap support on frame drop */
 		return 0;
-#endif
 	} else if ((vfe_dev->axi_data.src_info[frame_src].active) &&
 			((frame_id ==
 			vfe_dev->axi_data.src_info[frame_src].frame_id) ||
@@ -3763,13 +3764,11 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 			(stream_info->undelivered_request_cnt <=
 				MAX_BUFFERS_IN_HW)) {
 		vfe_dev->isp_page->drop_reconfig = 1;
-		pr_debug("%s: vfe_%d request_frame %d cur frame id %d pix %d\n",
+		pr_debug("%s: vfe_%d request_frame %d cur frame id %d pix %d try drop_reconfig\n",
 			__func__, vfe_dev->pdev->id, frame_id,
 			vfe_dev->axi_data.src_info[VFE_PIX_0].frame_id,
 			vfe_dev->axi_data.src_info[VFE_PIX_0].active);
-#ifdef VENDOR_EDIT /* Camera@Drv 2019/07/22, Add for frame remap support on frame drop */
 		return 0;
-#endif
 	} else if ((vfe_dev->axi_data.src_info[frame_src].active && (frame_id !=
 		vfe_dev->axi_data.src_info[frame_src].frame_id +
 		vfe_dev->axi_data.src_info[frame_src].sof_counter_step)) ||
@@ -3790,25 +3789,20 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 	if ((frame_src == VFE_PIX_0) && !stream_info->undelivered_request_cnt &&
 		MSM_VFE_STREAM_STOP_PERIOD !=
 		stream_info->activated_framedrop_period) {
+		/* wm is reloaded if undelivered_request_cnt is zero.
+		 * As per the hw behavior wm should be disabled or skip writing
+		 * before reload happens other wise wm could start writing from
+		 * middle of the frame and could result in image corruption.
+		 * instead of dropping frame in this error scenario use
+		 * drop_reconfig flag to process the request in next sof.
+		 */
 		pr_debug("%s:%d vfe %d frame_id %d prev_pattern %x stream_id %x\n",
 			__func__, __LINE__, vfe_dev->pdev->id, frame_id,
 			stream_info->activated_framedrop_period,
 			stream_info->stream_id);
 
-#ifdef VENDOR_EDIT /* Camera@Drv 2019/07/22, Add for frame remap support on frame drop */
 		vfe_dev->isp_page->drop_reconfig = 1;
 			return 0;
-#else
-		rc = msm_isp_return_empty_buffer(vfe_dev, stream_info,
-			user_stream_id, frame_id, buf_index, frame_src);
-		if (rc < 0)
-			pr_err("%s:%d failed: return_empty_buffer src %d\n",
-				__func__, __LINE__, frame_src);
-		stream_info->current_framedrop_period =
-			MSM_VFE_STREAM_STOP_PERIOD;
-		msm_isp_cfg_framedrop_reg(stream_info);
-		return 0;
-#endif
 	}
 
 	spin_lock_irqsave(&stream_info->lock, flags);

@@ -70,7 +70,7 @@
 #define ICNSS_QUIRKS_DEFAULT		BIT(FW_REJUVENATE_ENABLE)
 #define ICNSS_MAX_PROBE_CNT		2
 
-#define PROBE_TIMEOUT			5000
+#define PROBE_TIMEOUT			15000
 
 static struct icnss_priv *penv;
 
@@ -298,6 +298,10 @@ static char *icnss_driver_event_to_str(enum icnss_driver_event_type type)
 		return "PD_SERVICE_DOWN";
 	case ICNSS_DRIVER_EVENT_FW_EARLY_CRASH_IND:
 		return "FW_EARLY_CRASH_IND";
+	case ICNSS_DRIVER_EVENT_IDLE_SHUTDOWN:
+		return "IDLE_SHUTDOWN";
+	case ICNSS_DRIVER_EVENT_IDLE_RESTART:
+		return "IDLE_RESTART";
 	case ICNSS_DRIVER_EVENT_MAX:
 		return "EVENT_MAX";
 	}
@@ -970,6 +974,10 @@ static int icnss_driver_event_server_arrive(void *data)
 
 	ret = wlfw_ind_register_send_sync_msg(penv);
 	if (ret < 0) {
+		if (ret == -EALREADY) {
+			ret = 0;
+			goto qmi_registered;
+		}
 		ignore_assert = true;
 		goto err_power_on;
 	}
@@ -1029,6 +1037,7 @@ clear_server:
 	icnss_clear_server(penv);
 fail:
 	ICNSS_ASSERT(ignore_assert);
+qmi_registered:
 	return ret;
 }
 
@@ -1116,6 +1125,7 @@ static int icnss_pd_restart_complete(struct icnss_priv *priv)
 	icnss_call_driver_shutdown(priv);
 
 	clear_bit(ICNSS_PDR, &priv->state);
+	clear_bit(ICNSS_MODEM_CRASHED, &priv->state);
 	clear_bit(ICNSS_REJUVENATE, &priv->state);
 	clear_bit(ICNSS_PD_RESTART, &priv->state);
 	priv->early_crash_ind = false;
@@ -1375,6 +1385,51 @@ out:
 	return ret;
 }
 
+static int icnss_driver_event_idle_shutdown(void *data)
+{
+	int ret = 0;
+
+	if (!penv->ops || !penv->ops->idle_shutdown)
+		return 0;
+
+	if (test_bit(ICNSS_MODEM_CRASHED, &penv->state) ||
+			test_bit(ICNSS_PDR, &penv->state) ||
+			test_bit(ICNSS_REJUVENATE, &penv->state)) {
+		icnss_pr_err("SSR/PDR is already in-progress during idle shutdown callback\n");
+		ret = -EBUSY;
+	} else {
+		icnss_pr_dbg("Calling driver idle shutdown, state: 0x%lx\n",
+								penv->state);
+		icnss_block_shutdown(true);
+		ret = penv->ops->idle_shutdown(&penv->pdev->dev);
+		icnss_block_shutdown(false);
+	}
+
+	return ret;
+}
+
+static int icnss_driver_event_idle_restart(void *data)
+{
+	int ret = 0;
+
+	if (!penv->ops || !penv->ops->idle_restart)
+		return 0;
+
+	if (test_bit(ICNSS_MODEM_CRASHED, &penv->state) ||
+			test_bit(ICNSS_PDR, &penv->state) ||
+			test_bit(ICNSS_REJUVENATE, &penv->state)) {
+		icnss_pr_err("SSR/PDR is already in-progress during idle restart callback\n");
+		ret = -EBUSY;
+	} else {
+		icnss_pr_dbg("Calling driver idle restart, state: 0x%lx\n",
+								penv->state);
+		icnss_block_shutdown(true);
+		ret = penv->ops->idle_restart(&penv->pdev->dev);
+		icnss_block_shutdown(false);
+	}
+
+	return ret;
+}
 
 static void icnss_driver_event_work(struct work_struct *work)
 {
@@ -1420,6 +1475,12 @@ static void icnss_driver_event_work(struct work_struct *work)
 		case ICNSS_DRIVER_EVENT_FW_EARLY_CRASH_IND:
 			ret = icnss_driver_event_early_crash_ind(penv,
 								 event->data);
+			break;
+		case ICNSS_DRIVER_EVENT_IDLE_SHUTDOWN:
+			ret = icnss_driver_event_idle_shutdown(event->data);
+			break;
+		case ICNSS_DRIVER_EVENT_IDLE_RESTART:
+			ret = icnss_driver_event_idle_restart(event->data);
 			break;
 		default:
 			icnss_pr_err("Invalid Event type: %d", event->type);
@@ -1495,17 +1556,23 @@ static int icnss_modem_notifier_nb(struct notifier_block *nb,
 
 	priv->is_ssr = true;
 
+	if (notif->crashed)
+		set_bit(ICNSS_MODEM_CRASHED, &priv->state);
+
 	if (code == SUBSYS_BEFORE_SHUTDOWN && !notif->crashed &&
 	    atomic_read(&priv->is_shutdown)) {
 		atomic_set(&priv->is_shutdown, false);
-		icnss_call_driver_remove(priv);
+		if (!test_bit(ICNSS_PD_RESTART, &priv->state) &&
+		    !test_bit(ICNSS_SHUTDOWN_DONE, &priv->state)) {
+			icnss_call_driver_remove(priv);
+		}
 	}
 
 	if (code == SUBSYS_BEFORE_SHUTDOWN && !notif->crashed &&
 	    test_bit(ICNSS_BLOCK_SHUTDOWN, &priv->state)) {
 		if (!wait_for_completion_timeout(&priv->unblock_shutdown,
-						 PROBE_TIMEOUT))
-			icnss_pr_err("wlan driver probe timeout\n");
+				msecs_to_jiffies(PROBE_TIMEOUT)))
+			icnss_pr_err("modem block shutdown timeout\n");
 	}
 
 	if (code == SUBSYS_BEFORE_SHUTDOWN && !notif->crashed) {
@@ -2330,7 +2397,6 @@ out:
 }
 EXPORT_SYMBOL(icnss_trigger_recovery);
 
-
 static int icnss_smmu_init(struct icnss_priv *priv)
 {
 	struct dma_iommu_mapping *mapping;
@@ -2421,6 +2487,48 @@ static void icnss_smmu_deinit(struct icnss_priv *priv)
 
 	priv->smmu_mapping = NULL;
 }
+
+int icnss_idle_shutdown(struct device *dev)
+{
+	struct icnss_priv *priv = dev_get_drvdata(dev);
+
+	if (!priv) {
+		icnss_pr_err("Invalid drvdata: dev %pK", dev);
+		return -EINVAL;
+	}
+
+	if (test_bit(ICNSS_MODEM_CRASHED, &priv->state) ||
+			test_bit(ICNSS_PDR, &priv->state) ||
+			test_bit(ICNSS_REJUVENATE, &penv->state)) {
+		icnss_pr_err("SSR/PDR is already in-progress during idle shutdown\n");
+		return -EBUSY;
+	}
+
+	return icnss_driver_event_post(ICNSS_DRIVER_EVENT_IDLE_SHUTDOWN,
+					ICNSS_EVENT_SYNC_UNINTERRUPTIBLE, NULL);
+}
+EXPORT_SYMBOL(icnss_idle_shutdown);
+
+int icnss_idle_restart(struct device *dev)
+{
+	struct icnss_priv *priv = dev_get_drvdata(dev);
+
+	if (!priv) {
+		icnss_pr_err("Invalid drvdata: dev %pK", dev);
+		return -EINVAL;
+	}
+
+	if (test_bit(ICNSS_MODEM_CRASHED, &priv->state) ||
+			test_bit(ICNSS_PDR, &priv->state) ||
+			test_bit(ICNSS_REJUVENATE, &penv->state)) {
+		icnss_pr_err("SSR/PDR is already in-progress during idle restart\n");
+		return -EBUSY;
+	}
+
+	return icnss_driver_event_post(ICNSS_DRIVER_EVENT_IDLE_RESTART,
+					ICNSS_EVENT_SYNC_UNINTERRUPTIBLE, NULL);
+}
+EXPORT_SYMBOL(icnss_idle_restart);
 
 static int icnss_get_vreg_info(struct device *dev,
 			       struct icnss_vreg_info *vreg_info)
@@ -2654,6 +2762,15 @@ static void icnss_allow_recursive_recovery(struct device *dev)
 	icnss_pr_info("Recursive recovery allowed for WLAN\n");
 }
 
+static void icnss_disallow_recursive_recovery(struct device *dev)
+{
+	struct icnss_priv *priv = dev_get_drvdata(dev);
+
+	priv->allow_recursive_recovery = false;
+
+	icnss_pr_info("Recursive recovery disallowed for WLAN\n");
+}
+
 static ssize_t icnss_fw_debug_write(struct file *fp,
 				    const char __user *user_buf,
 				    size_t count, loff_t *off)
@@ -2704,6 +2821,9 @@ static ssize_t icnss_fw_debug_write(struct file *fp,
 			break;
 		case 4:
 			icnss_allow_recursive_recovery(&priv->pdev->dev);
+			break;
+		case 5:
+			icnss_disallow_recursive_recovery(&priv->pdev->dev);
 			break;
 		default:
 			return -EINVAL;
@@ -2827,6 +2947,9 @@ static int icnss_stats_show_state(struct seq_file *s, struct icnss_priv *priv)
 			continue;
 		case ICNSS_PDR:
 			seq_puts(s, "PDR TRIGGERED");
+			continue;
+		case ICNSS_MODEM_CRASHED:
+			seq_puts(s, "MODEM CRASHED");
 		}
 
 		seq_printf(s, "UNKNOWN-%d", i);
@@ -3371,6 +3494,8 @@ static int icnss_probe(struct platform_device *pdev)
 	priv->pdev = pdev;
 
 	priv->vreg_info = icnss_vreg_info;
+
+	icnss_allow_recursive_recovery(dev);
 
 	if (of_property_read_bool(pdev->dev.of_node, "qcom,icnss-adc_tm")) {
 		ret = icnss_get_vbatt_info(priv);
