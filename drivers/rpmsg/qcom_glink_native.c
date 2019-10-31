@@ -1969,10 +1969,19 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 		dev_err(dev, "failed to register early notif %d\n", ret);
 
 	irq = of_irq_get(dev->of_node, 0);
+//yangmingjin@BSP.POWER.Basic 2019/06/27 add for RM_TAG_POWER_DEBUG
+#ifndef VENDOR_EDIT
 	ret = devm_request_irq(dev, irq,
 			       qcom_glink_native_intr,
 			       IRQF_NO_SUSPEND | IRQF_SHARED,
 			       "glink-native", glink);
+#else
+	ret = devm_request_irq(dev, irq,
+			       qcom_glink_native_intr,
+			       IRQF_NO_SUSPEND | IRQF_SHARED,
+			       glink->name, glink);
+#endif
+/*VENDOR_EDIT*/
 	if (ret) {
 		dev_err(dev, "failed to request IRQ\n");
 		goto unregister;
