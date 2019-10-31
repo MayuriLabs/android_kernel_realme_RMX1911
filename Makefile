@@ -393,6 +393,10 @@ PERL		= perl
 PYTHON		= python
 CHECK		= sparse
 
+# Use the wrapper for the compiler.  This wrapper scans for new
+# warnings and causes the build to stop upon encountering them
+#CC		= $(PYTHON) $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
+
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
 NOSTDINC_FLAGS  =
@@ -433,6 +437,58 @@ KBUILD_AFLAGS_MODULE  := -DMODULE
 KBUILD_CFLAGS_MODULE  := -DMODULE
 KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
 GCC_PLUGINS_CFLAGS :=
+
+# ifdef OEM_WT_EDIT
+# yulianghan@realme.com, 2019/04/26, add enviroment variant
+KBUILD_CFLAGS +=   -DODM_WT_EDIT
+KBUILD_CPPFLAGS += -DODM_WT_EDIT
+CFLAGS_KERNEL +=   -DODM_WT_EDIT
+CFLAGS_MODULE +=   -DODM_WT_EDIT
+
+
+# jiangyg@OnlineRd.PM, 2013/10/15, add enviroment variant
+KBUILD_CFLAGS +=   -DVENDOR_EDIT
+KBUILD_CPPFLAGS += -DVENDOR_EDIT
+CFLAGS_KERNEL +=   -DVENDOR_EDIT
+CFLAGS_MODULE +=   -DVENDOR_EDIT
+
+
+ifneq ($(SPECIAL_OPPO_CONFIG),1)
+ifeq ($(filter release cts,$(OPPO_BUILD_TYPE)),)
+ifeq ($(filter cmcctest cmccfield allnetcttest,$(NET_BUILD_TYPE)),)
+KBUILD_CFLAGS += -DCONFIG_OPPO_DAILY_BUILD
+endif
+endif
+endif
+
+ifeq ($(SPECIAL_OPPO_CONFIG),1)
+KBUILD_CFLAGS += -DCONFIG_OPPO_SPECIAL_BUILD
+KBUILD_CFLAGS += -DOPPO_AGING_BUILD
+endif
+
+ifeq ($(NET_BUILD_TYPE),cmcctest)
+KBUILD_CFLAGS += -DOPPO_CMCC_TEST
+endif
+ifeq ($(NET_BUILD_TYPE),cmccfield)
+KBUILD_CFLAGS += -DOPPO_CMCC_TEST
+endif
+ifeq ($(NET_BUILD_TYPE),cmcc)
+KBUILD_CFLAGS += -DOPPO_CMCC_MP
+endif
+ifeq ($(NET_BUILD_TYPE),cutest)
+KBUILD_CFLAGS += -DOPPO_CU_TEST
+endif
+ifeq ($(NET_BUILD_TYPE),cu)
+KBUILD_CFLAGS += -DOPPO_CU_CLIENT
+endif
+ifeq ($(NET_BUILD_TYPE),cmcctest_dm)
+KBUILD_CFLAGS += -DOPPO_CMCC_TEST
+endif
+ifeq ($(OPPO_BUILD_TYPE),cta)
+KBUILD_CFLAGS += -DOPPO_CTA_FLAG
+KBUILD_CPPFLAGS += -DOPPO_CTA_FLAG
+endif
+#endif /*VENDOR_EDIT*/
 
 export ARCH SRCARCH CONFIG_SHELL HOSTCC HOSTCFLAGS CROSS_COMPILE AS LD CC
 export CPP AR NM STRIP OBJCOPY OBJDUMP HOSTLDFLAGS HOST_LOADLIBES
@@ -674,7 +730,12 @@ KBUILD_CFLAGS	+= $(call cc-disable-warning, format-truncation)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-overflow)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
-
+ifeq ($(ODM_WT_EDIT),yes)
+# Yajun.Zhang@ODM_WT.Performance.1941873, 2019/04/26, add for important debug config and controlled by WT_FINAL_RELEASE
+ifeq ($(WT_FINAL_RELEASE),yes)
+KBUILD_CFLAGS	+= $(call cc-disable-warning, array-bounds)
+endif # WT_FINAL_RELEASE
+endif # ODM_WT_EDIT
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS	+= $(call cc-option,-Oz,-Os)
 KBUILD_CFLAGS	+= $(call cc-disable-warning,maybe-uninitialized,)
@@ -682,7 +743,14 @@ else
 ifdef CONFIG_PROFILE_ALL_BRANCHES
 KBUILD_CFLAGS	+= -O2 $(call cc-disable-warning,maybe-uninitialized,)
 else
+ifeq ($(ODM_WT_EDIT),yes)
+# Yajun.Zhang@ODM_WT.Performance.1941873, 2019/04/26, add for important debug config and controlled by WT_FINAL_RELEASE
+ifeq ($(WT_FINAL_RELEASE),yes)
+KBUILD_CFLAGS	+= -O2 $(call cc-disable-warning,maybe-uninitialized,)
+else
 KBUILD_CFLAGS   += -O2
+endif # WT_FINAL_RELEASE
+endif # ODM_WT_EDIT
 endif
 endif
 
@@ -765,6 +833,12 @@ KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
+
+# ifdef ODM_WT_EDIT
+# Wu Kang@ODM_WT.SCM, 2019/04/17,to control otre flags:such as factory,release,global flags
+KBUILD_CFLAGS += $(MTK_CDEFS)
+# endif /*ODM_WT_EDIT*/
+
 ifdef CONFIG_FRAME_POINTER
 KBUILD_CFLAGS	+= -fno-omit-frame-pointer -fno-optimize-sibling-calls
 else
