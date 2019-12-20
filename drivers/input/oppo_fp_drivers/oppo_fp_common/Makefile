@@ -11,7 +11,7 @@ else
 DEFS_PLATFORM = -DCONFIG_OPPO_FINGERPRINT_PLATFORM=0
 endif
 
-ccflags-y += $(DEFS_PLATFORM)
+ccflags-y += $(DEFS_PLATFORM) -Wno-implicit-function-declaration
 
 obj-y     +=  oppo_fp_common.o
 
